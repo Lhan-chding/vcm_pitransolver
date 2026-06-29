@@ -1,0 +1,38 @@
+# --- data: never commit the dataset or extracted dev samples (multi-GB) ---
+_devdata/
+*.zip
+*.step
+*.scdocx
+*.inp
+*.cdb
+*.vtk
+*.vtu
+nodes.csv
+elements.csv
+*.png
+
+# --- generated reports / outputs ---
+reports/*.csv
+reports/*.npy
+reports/*.png
+outputs/
+predictions/
+*.ckpt
+*.pt
+*.pth
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

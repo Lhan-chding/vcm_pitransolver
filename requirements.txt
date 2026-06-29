@@ -1,0 +1,13 @@
+# Stage 0 / direct-FEM (CPU, no GPU needed) — runnable in any recent Python 3.10+
+numpy>=1.26
+scipy>=1.11
+
+# Stage 1+ (Transolver training) — provided by the PhysicsNeMo Docker image on the
+# A800 server; pinned here only for reference. Do NOT pip-install torch into the
+# PhysicsNeMo container (it ships its own NV-built torch 2.8 / CUDA 12.9).
+#   torch==2.8.0a0+...nv25.06   (from container)
+#   nvidia-physicsnemo==1.2.0
+#   nvidia-physicsnemo.sym==2.2.0
+
+# Optional faster sparse solve for direct-FEM on the server:
+# pypardiso>=0.4    # MKL Pardiso; big speedup for 400k-DOF systems
