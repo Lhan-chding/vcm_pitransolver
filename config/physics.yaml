@@ -1,0 +1,37 @@
+# Physics / boundary-condition configuration.
+# Confirmed by user 2026-06-29.
+
+loading:
+  mode: displacement_control      # move face gets a prescribed displacement.
+                                  # REQUIRED for min(U) == equilibrium (W_external=0).
+                                  # If ever changed to force control, energy loss MUST
+                                  # become min(U - W) or the solution collapses to u=0.
+
+  move_axis: x                    # CONFIRMED: voice-coil stroke is the X (out-of-plane)
+                                  # direction. Plate is ~0.06 mm thin in X.
+                                  # NOTE: the move face NORMAL lies in-plane (Y-Z); the
+                                  # PRESCRIBED DISPLACEMENT direction is X (different from
+                                  # the face normal). This is intentional and confirmed.
+
+  # prescribed displacement magnitude on the move face, in mm.
+  # Must stay << plate thickness (0.06 mm) to respect small-strain linear elasticity.
+  delta_mm: 0.005                 # 5 micron; placeholder, tune in Stage 1. K is delta-
+                                  # independent in linear elasticity, but too-small delta
+                                  # underflows energy, too-large violates small strain.
+
+  # constraint on the move face for the NON-loaded directions (y, z):
+  #   rigid     -> u_y = u_z = 0 on move face (rigid in-plane translation)
+  #   free      -> only u_x prescribed, y/z left to the solver
+  move_transverse: rigid          # start rigid; revisit vs ANSYS remote-displacement model
+
+boundary_sets:
+  authority: named_selections     # FIXED_TOP_FACES + MOVE_INNER_RING_FACE face ids here
+                                  # are the source of truth; node sets are reconstructed
+                                  # geometrically (mesh has no NSET/.cdb).
+  fixed_selection: FIXED_TOP_FACES       # 4 corner top pads -> u = 0
+  move_selection: MOVE_INNER_RING_FACE   # central ring inner wall -> u_x = delta
+
+units:
+  length: mm
+  force: N
+  stress: MPa                     # consistent set: mm-N-MPa  (E in MPa, K in N/mm)
