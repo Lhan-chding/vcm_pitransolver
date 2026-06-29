@@ -140,8 +140,79 @@ def _read_elements(
     return np.asarray(elem_ids, dtype=np.int64), connectivity, np.asarray(nnodes, dtype=np.int8)
 
 
-def load_mesh(variant_dir: str | Path) -> Mesh:
-    """Parse one variant directory into a validated, indexed Mesh."""
+# Corner-swap that flips orientation, paired with the mid-edge index permutation that
+# keeps each mid-edge node attached to the same physical edge after the corner swap.
+# These restore a positive Jacobian when a family's winding is reversed vs. our
+# reference convention. Verified against the real dataset (tet10 is reversed there:
+# swapping corners 0<->1 takes all real tet10 from detJ<0 to detJ>0 AND passes the
+# constant-strain patch test on real elements).
+_ORIENT_FIX = {
+    # tet10 C3D10: corners 0,1,2,3 ; edges 4(0-1)5(1-2)6(2-0)7(0-3)8(1-3)9(2-3)
+    # swap corners 0<->1  => edge5(1-2)<->edge6(2-0), edge7(0-3)<->edge8(1-3)
+    10: [1, 0, 2, 3, 4, 6, 5, 8, 7, 9],
+    # wedge15 C3D15: swap the two triangle vertices 1<->2 on both faces.
+    # corners b:0,1,2 t:3,4,5 ; edges 6(0-1)7(1-2)8(2-0) 9(3-4)10(4-5)11(5-3) vert 12,13,14
+    15: [0, 2, 1, 3, 5, 4, 8, 7, 6, 11, 10, 9, 12, 14, 13],
+    # hex20 C3D20: reflect bottom<->top to flip handedness.
+    # corners b:0,1,2,3 t:4,5,6,7 ; edges 8-11(bottom)12-15(top)16-19(vertical)
+    20: [4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11, 16, 17, 18, 19],
+}
+
+
+def _element_detj_sign(coords: np.ndarray, row: np.ndarray, nnode: int) -> float:
+    """detJ sign of an element, computed with its OWN FEM shape functions.
+
+    This is the ground-truth orientation test: it uses the exact mapping the FEM
+    engine will use, so there is no sign-convention to reconcile by hand. A
+    negative value means the element is reversed relative to the engine's
+    convention and must be repaired. Imports the element modules lazily so the
+    parser has no hard dependency on fem/ when normalization is disabled.
+    """
+    # ensure the repo root (parent of data/) is importable even when this file is
+    # run directly as a script (python data/parse_mesh.py), where only data/ is on
+    # sys.path. pytest already puts the repo root on the path via conftest.
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _root = str(_Path(__file__).resolve().parents[1])
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    from fem.elements import tet10, wedge15, hex20  # lazy
+
+    mod = {10: tet10, 15: wedge15, 20: hex20}[nnode]
+    nat = mod.GAUSS[0][0]                      # evaluate at one Gauss point
+    xyz = coords[row]
+    J = xyz.T @ mod.shape_grads(nat)
+    return float(np.linalg.det(J))
+
+
+def _normalize_orientation(
+    coords: np.ndarray, connectivity: list, elem_nnode: np.ndarray
+) -> tuple[list, dict]:
+    """Repair reversed-winding elements so every element has positive orientation.
+
+    Uses each element's own FEM detJ as the orientation oracle. Robust to meshes
+    that mix orientations. Returns (new_connectivity, per-family fix counts).
+    """
+    fixed = {10: 0, 15: 0, 20: 0}
+    out = []
+    for row, nn in zip(connectivity, elem_nnode):
+        nn = int(nn)
+        if _element_detj_sign(coords, row, nn) < 0.0:
+            row = row[_ORIENT_FIX[nn]]
+            fixed[nn] += 1
+        out.append(row)
+    return out, fixed
+
+
+def load_mesh(variant_dir: str | Path, normalize_orientation: bool = True) -> Mesh:
+    """Parse one variant directory into a validated, indexed Mesh.
+
+    If normalize_orientation is True (default), reversed-winding elements are
+    repaired so the FEM engine always receives positively-oriented elements
+    (detJ > 0). The dataset's tet10 elements use the opposite winding from the
+    standard C3D10 reference, so this is required for correct physics.
+    """
     variant_dir = Path(variant_dir)
     nodes_csv = variant_dir / "nodes.csv"
     elements_csv = variant_dir / "elements.csv"
@@ -160,6 +231,9 @@ def load_mesh(variant_dir: str | Path) -> Mesh:
             n_degenerate += 1
     if n_degenerate:
         raise ValueError(f"{n_degenerate} elements have repeated node ids (degenerate element)")
+
+    if normalize_orientation:
+        connectivity, _ = _normalize_orientation(coords, connectivity, elem_nnode)
 
     return Mesh(
         node_ids=node_ids,
