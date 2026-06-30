@@ -205,13 +205,89 @@ def _normalize_orientation(
     return out, fixed
 
 
-def load_mesh(variant_dir: str | Path, normalize_orientation: bool = True) -> Mesh:
+def _merge_coincident_nodes(
+    node_ids: np.ndarray,
+    coords: np.ndarray,
+    connectivity: list,
+    tol: float,
+) -> tuple[np.ndarray, np.ndarray, list, dict, int]:
+    """Tie geometrically-coincident nodes into a single shared node.
+
+    WHY (dataset fact, verified on VCM_COMPLEX_0001): the spring is one bonded
+    part, but the mesh export leaves the four corner fixed-pads as separate
+    sub-meshes whose interface nodes DUPLICATE the central-body nodes at the same
+    location instead of sharing them. The result is a mesh of 5 disconnected
+    components: pushing the (separate) mover face transmits NO force to the fixed
+    pads, the FEM solve becomes a zero-energy rigid-body mechanism (U ~ 0), and
+    any stiffness K is meaningless. Merging the coincident interface nodes
+    restores a single connected solid and a real load path.
+
+    Strategy: cluster nodes whose coordinates agree within `tol` (a KD-tree
+    radius query), pick the lowest row index in each cluster as canonical, remap
+    every connectivity reference to the canonical row, then compact away the now-
+    orphaned duplicate rows so `coords`/`node_ids` stay dense and 0-based-row.
+
+    Returns (new_node_ids, new_coords, new_connectivity, new_id_to_row, n_merged).
+    """
+    from scipy.spatial import cKDTree
+
+    n = coords.shape[0]
+    tree = cKDTree(coords)
+    pairs = tree.query_pairs(r=tol, output_type="ndarray")
+    if len(pairs) == 0:
+        id_to_row = {int(nid): i for i, nid in enumerate(node_ids)}
+        return node_ids, coords, connectivity, id_to_row, 0
+
+    # Union-find over coincident pairs so chains of >2 duplicates collapse together.
+    parent = np.arange(n, dtype=np.int64)
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for a, b in pairs:
+        ra, rb = find(int(a)), find(int(b))
+        if ra != rb:
+            # canonical = smaller row index, for determinism
+            lo, hi = (ra, rb) if ra < rb else (rb, ra)
+            parent[hi] = lo
+
+    canonical = np.array([find(i) for i in range(n)], dtype=np.int64)
+    keep = np.unique(canonical)                       # surviving (canonical) rows
+    old_to_new = np.full(n, -1, dtype=np.int64)
+    old_to_new[keep] = np.arange(keep.size, dtype=np.int64)
+    # every node maps to the NEW index of its canonical representative
+    remap = old_to_new[canonical]
+
+    new_coords = coords[keep]
+    new_node_ids = node_ids[keep]
+    new_connectivity = [remap[np.asarray(row)] for row in connectivity]
+    new_id_to_row = {int(nid): i for i, nid in enumerate(new_node_ids)}
+    n_merged = n - keep.size
+    return new_node_ids, new_coords, new_connectivity, new_id_to_row, n_merged
+
+
+def load_mesh(
+    variant_dir: str | Path,
+    normalize_orientation: bool = True,
+    merge_coincident: bool = True,
+    merge_tol: float = 1e-6,
+) -> Mesh:
     """Parse one variant directory into a validated, indexed Mesh.
 
     If normalize_orientation is True (default), reversed-winding elements are
     repaired so the FEM engine always receives positively-oriented elements
     (detJ > 0). The dataset's tet10 elements use the opposite winding from the
     standard C3D10 reference, so this is required for correct physics.
+
+    If merge_coincident is True (default), nodes sharing a location within
+    merge_tol are tied into one shared node. The dataset exports the corner
+    fixed-pads as separate sub-meshes with DUPLICATE interface nodes, leaving the
+    mesh in several disconnected components; without merging, the FEM solve is a
+    zero-energy mechanism. Merging restores the single bonded solid. Set False to
+    inspect the raw (unmerged) mesh.
     """
     variant_dir = Path(variant_dir)
     nodes_csv = variant_dir / "nodes.csv"
@@ -221,6 +297,15 @@ def load_mesh(variant_dir: str | Path, normalize_orientation: bool = True) -> Me
 
     node_ids, coords, id_to_row = _read_nodes(nodes_csv)
     elem_ids, connectivity, elem_nnode = _read_elements(elements_csv, id_to_row)
+
+    # Merge coincident interface nodes BEFORE the degeneracy/orientation checks so
+    # those run on the final, connected connectivity. A merge that collapses two
+    # nodes of the same element into one would surface as a degenerate element
+    # below — exactly the failure we want to catch, not hide.
+    if merge_coincident:
+        node_ids, coords, connectivity, id_to_row, _ = _merge_coincident_nodes(
+            node_ids, coords, connectivity, merge_tol
+        )
 
     n = coords.shape[0]
     n_degenerate = 0
