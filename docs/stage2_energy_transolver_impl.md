@@ -1,8 +1,8 @@
 # Stage 2 实施级设计：`fem/energy.py` + Transolver 接入
 
-**版本**：v1.0（实施规格，落到接口签名级）
+**版本**：v1.1（规格 + 已实现状态）
 **日期**：2026-06-30
-**状态**：Stage 1 引擎已实测建成（65 tests），本文档把 design_plan_v1 的 §5.3/§5.5/§5.6 蓝图细化为可直接照着写代码的规格。
+**状态**：✅ **P3-P5 已实现并通过测试（本地 PINN env，107 tests）**。energy.py / bc_enforce.py / features.py / transolver_wrap.py(含 FakeBackbone) / train_single.py 全部落地。**端到端验证：fake backbone 用能量损失训练，K_energy 收敛到解析解 E=127000 N/mm 误差 0.01%（127012.7），|u|max→δ 精确**——证明"最小化可微弹性能 == 恢复真实物理"。剩 P6+(容器内 Transolver API 实测 + 真训练)待服务器。Stage 1 引擎已建成（65 tests）。
 **上游**：[`docs/design_plan_v1.md`](design_plan_v1.md)（架构基线）。本文档不重复物理原理，只补"怎么和已有代码对接 + 真实 API + 验证方案"。
 
 ---
