@@ -90,6 +90,48 @@ def test_single_hex_uniaxial_stiffness_equals_E():
     assert stiff.rel_gap < 1e-9
 
 
+def test_solver_backend_recorded_and_scipy_default():
+    """The default backend is scipy and the result records which backend solved."""
+    mesh = _single_hex_mesh()
+    C = elastic_C(E, NU)
+    bs = _x_face_boundary(mesh.coords)
+    res = solve_displacement(mesh, bs, C, move_axis="x", delta_mm=DELTA,
+                             move_transverse_rigid=False)
+    assert res.solver_backend == "scipy"
+
+
+def test_solver_backend_auto_falls_back_to_scipy():
+    """'auto' tries optional backends; with none installed it lands on scipy and
+    gives the identical solution as the explicit scipy path."""
+    mesh = _single_hex_mesh()
+    C = elastic_C(E, NU)
+    bs = _x_face_boundary(mesh.coords)
+    r_scipy = solve_displacement(mesh, bs, C, move_axis="x", delta_mm=DELTA,
+                                 move_transverse_rigid=False, backend="scipy")
+    r_auto = solve_displacement(mesh, bs, C, move_axis="x", delta_mm=DELTA,
+                                move_transverse_rigid=False, backend="auto")
+    # auto resolves to whatever is installed; here only scipy is, so equal fields.
+    assert np.allclose(r_scipy.u, r_auto.u, atol=1e-12)
+    assert r_auto.solver_backend in ("scipy", "cholmod", "pypardiso", "umfpack")
+
+
+def test_missing_backend_warns_and_falls_back():
+    """An explicitly-requested but uninstalled backend warns and uses scipy."""
+    pytest.importorskip  # noqa: B018 — ensure pytest has the helper
+    try:
+        import pypardiso  # noqa: F401
+        pytest.skip("pypardiso IS installed; the missing-backend path can't be exercised")
+    except ImportError:
+        pass
+    mesh = _single_hex_mesh()
+    C = elastic_C(E, NU)
+    bs = _x_face_boundary(mesh.coords)
+    with pytest.warns(UserWarning, match="unavailable"):
+        res = solve_displacement(mesh, bs, C, move_axis="x", delta_mm=DELTA,
+                                 move_transverse_rigid=False, backend="pypardiso")
+    assert res.solver_backend == "scipy"
+
+
 def test_displacement_field_matches_linear_solution():
     """u_x must equal delta * x exactly (linear field), u_y = u_z = 0 at nu=0."""
     mesh = _single_hex_mesh()

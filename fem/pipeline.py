@@ -30,7 +30,7 @@ from parse_mesh import Mesh, load_mesh
 from fem.assembly import assemble_global_stiffness, num_dofs
 from fem.direct_solver import solve_displacement
 from fem.material import Material, load_material
-from fem.postprocess import compute_stiffness, von_mises_nodal
+from fem.postprocess import compute_element_max_von_mises, compute_stiffness, von_mises_nodal
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -58,9 +58,11 @@ class VariantSolve:
     move_face_force: float
     u_max: float
     u_mean: float
-    vm_max: float
+    vm_max: float                   # nodal-averaged peak (smoothed; visualization)
     vm_mean: float
-    vm_frac_yield: float
+    vm_frac_yield: float            # based on nodal vm_max
+    vm_max_element: float           # element/Gauss peak (UNSMEARED; the real max stress)
+    vm_frac_yield_element: float    # based on the element-level peak — use this for safety
     # heavy fields (not for CSV): the full solved displacement / stress.
     u: np.ndarray | None = field(default=None, repr=False)
     von_mises: np.ndarray | None = field(default=None, repr=False)
@@ -129,6 +131,8 @@ def solve_variant(
     )
     stiff = compute_stiffness(mesh, res, C)
     vm = von_mises_nodal(mesh, res.u, C)
+    _, vm_elem = compute_element_max_von_mises(mesh, res.u, C)
+    vm_max_elem = float(vm_elem.max()) if vm_elem.size else float("nan")
     u_mag = np.linalg.norm(res.u, axis=1)
 
     return VariantSolve(
@@ -155,6 +159,9 @@ def solve_variant(
         vm_mean=float(vm.mean()),
         vm_frac_yield=(float(vm.max()) / mat.tensile_yield_MPa
                        if mat.tensile_yield_MPa else float("nan")),
+        vm_max_element=vm_max_elem,
+        vm_frac_yield_element=(vm_max_elem / mat.tensile_yield_MPa
+                               if mat.tensile_yield_MPa else float("nan")),
         u=res.u if keep_fields else None,
         von_mises=vm if keep_fields else None,
     )

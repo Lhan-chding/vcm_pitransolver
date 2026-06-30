@@ -55,6 +55,7 @@ _SCALAR_FIELDS = [
     "K_energy", "K_reaction", "rel_gap",
     "total_strain_energy", "move_face_force",
     "u_max", "u_mean", "vm_max", "vm_mean", "vm_frac_yield",
+    "vm_max_element", "vm_frac_yield_element",
     "trustworthy", "elapsed_s", "error",
 ]
 

@@ -16,7 +16,9 @@ reports/*.csv
 reports/*.npy
 reports/*.png
 reports/*.npz
+reports/*.log
 reports/fields/
+reports/boundary_visualization/
 outputs/
 predictions/
 *.ckpt

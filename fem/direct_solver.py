@@ -38,6 +38,45 @@ from fem.assembly import assemble_global_stiffness, num_dofs
 # Map axis name -> component index, matching the [ux, uy, uz] DOF layout.
 _AXIS = {"x": 0, "y": 1, "z": 2}
 
+# Supported sparse-solve backends, in rough order of speed on large SPD systems.
+# scipy is always available; the others are optional accelerators (faster on the
+# ~430k-DOF systems if installed). "auto" picks the fastest available.
+_BACKENDS = ("auto", "scipy", "pypardiso", "umfpack", "cholmod")
+
+
+def _sparse_solve(Kff: sp.csc_matrix, rhs: np.ndarray, backend: str) -> tuple[np.ndarray, str]:
+    """Solve Kff u = rhs with the requested backend; return (u, backend_used).
+
+    Kff is SPD (all rigid modes removed by the supports), so a Cholesky-capable
+    backend (cholmod) is ideal; pypardiso/umfpack are strong LU alternatives.
+    Falls back to scipy.sparse spsolve, which is always present.
+    """
+    order = (("cholmod", "pypardiso", "umfpack", "scipy") if backend == "auto"
+             else (backend,))
+    last_err = None
+    for name in order:
+        try:
+            if name == "scipy":
+                return spla.spsolve(Kff, rhs), "scipy"
+            if name == "pypardiso":
+                import pypardiso  # type: ignore
+                return pypardiso.spsolve(Kff, rhs), "pypardiso"
+            if name == "umfpack":
+                import scikits.umfpack as um  # type: ignore
+                return um.spsolve(Kff.tocsc(), rhs), "umfpack"
+            if name == "cholmod":
+                from sksparse.cholmod import cholesky  # type: ignore
+                factor = cholesky(Kff.tocsc())
+                return factor(rhs), "cholmod"
+        except ImportError as exc:
+            last_err = exc
+            continue  # backend not installed -> try the next one
+    # if an explicit (non-auto) backend was requested but missing, fall back loudly
+    if backend not in ("auto", "scipy"):
+        import warnings
+        warnings.warn(f"backend {backend!r} unavailable ({last_err}); using scipy spsolve")
+    return spla.spsolve(Kff, rhs), "scipy"
+
 
 @dataclass(frozen=True)
 class SolveResult:
@@ -50,6 +89,7 @@ class SolveResult:
     prescribed: np.ndarray        # (Nc,) prescribed values at those DOFs (mm)
     move_axis: int                # component index of the prescribed move direction
     delta_mm: float               # prescribed move-face displacement magnitude
+    solver_backend: str = "scipy" # which sparse backend actually solved the system
 
 
 def _build_dirichlet(
@@ -99,6 +139,7 @@ def solve_displacement(
     delta_mm: float = 0.005,
     move_transverse_rigid: bool = True,
     K: sp.csr_matrix | None = None,
+    backend: str = "scipy",
 ) -> SolveResult:
     """Assemble (if needed), apply Dirichlet BCs, solve K u = f, return the field.
 
@@ -134,9 +175,9 @@ def solve_displacement(
 
     # K_ff u_f = -K_fc u_c   (no free-DOF external loads)
     rhs = -(Kfc @ c_vals)
-    u_f = spla.spsolve(Kff, rhs)
+    u_f, backend_used = _sparse_solve(Kff, rhs, backend)
     if not np.all(np.isfinite(u_f)):
-        raise FloatingPointError("spsolve returned non-finite displacements")
+        raise FloatingPointError(f"{backend_used} solve returned non-finite displacements")
 
     # Reassemble the full displacement vector.
     u_full = np.zeros(ndof, dtype=np.float64)
@@ -154,4 +195,5 @@ def solve_displacement(
         prescribed=c_vals,
         move_axis=axis,
         delta_mm=delta_mm,
+        solver_backend=backend_used,
     )
