@@ -1,0 +1,39 @@
+# Material database for VCM spring physics.
+# Values extracted from the user's ANSYS Engineering Data (EngineeringData v22.1).
+# Units: mm-N-MPa  (E, G, K, yield in MPa; density in kg/m^3).
+# Self-consistency of E/nu vs the file's derived G & K was verified to machine precision.
+
+# PRIMARY material for the spring blade (弹簧弹片).
+default: C1990
+
+materials:
+  # Copper-alloy spring blade. THIS is the spring material.
+  C1990:
+    behavior: isotropic
+    E_MPa: 127000.0          # Young's modulus  (file: 127e9 Pa)
+    nu: 0.33                 # Poisson's ratio
+    G_MPa: 47744.36          # shear modulus    (derived, matches file pa11)
+    K_bulk_MPa: 124509.80    # bulk modulus     (derived, matches file pa10)
+    density_kg_m3: 8900.0
+    tensile_yield_MPa: 1390.0
+    note: "spring blade material (copper alloy C1990); isotropic linear elastic"
+
+  # Other materials present in the assembly EngineeringData, kept for reference /
+  # possible multi-body extension. NOT used for the single-material spring solve.
+  Cu:
+    behavior: isotropic
+    E_MPa: 75000.0
+    nu: 0.33
+    density_kg_m3: 8900.0
+  BF158-TM10:
+    behavior: isotropic
+    E_MPa: 128000.0
+    nu: 0.30
+    density_kg_m3: 9000.0
+    tensile_yield_MPa: 1205.0
+  suspension_wire:
+    behavior: isotropic
+    E_MPa: 116000.0
+    nu: 0.33
+    density_kg_m3: 8700.0
+    tensile_yield_MPa: 1343.0

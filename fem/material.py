@@ -20,11 +20,57 @@ C is symmetric positive-definite for 0 <= nu < 0.5 and E > 0.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
 
 # Voigt component order used throughout the engine.  Documented here so any
 # reader can confirm the constitutive matrix and the B-matrix agree.
 VOIGT_ORDER: tuple[str, ...] = ("xx", "yy", "zz", "xy", "yz", "zx")
+
+# Default material config (the spring blade material C1990 lives here).
+_MATERIAL_YAML = Path(__file__).resolve().parents[1] / "config" / "material.yaml"
+
+
+@dataclass(frozen=True)
+class Material:
+    """Isotropic linear-elastic material in mm-N-MPa units."""
+
+    name: str
+    E_MPa: float
+    nu: float
+    density_kg_m3: float | None = None
+    tensile_yield_MPa: float | None = None
+
+    def C(self) -> np.ndarray:
+        """Constitutive matrix for this material."""
+        return elastic_C(self.E_MPa, self.nu)
+
+
+def load_material(name: str | None = None, yaml_path: str | Path | None = None) -> Material:
+    """Load a named material from config/material.yaml (default = the file's `default`).
+
+    Only isotropic materials are supported by elastic_C; a non-isotropic entry raises.
+    """
+    import yaml  # local import keeps numpy-only code paths dependency-free
+
+    path = Path(yaml_path) if yaml_path else _MATERIAL_YAML
+    with open(path, encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh)
+    name = name or cfg["default"]
+    entry = cfg["materials"].get(name)
+    if entry is None:
+        raise KeyError(f"material {name!r} not in {path} (have: {list(cfg['materials'])})")
+    if entry.get("behavior", "isotropic") != "isotropic":
+        raise ValueError(f"material {name!r} is not isotropic; elastic_C supports isotropic only")
+    return Material(
+        name=name,
+        E_MPa=float(entry["E_MPa"]),
+        nu=float(entry["nu"]),
+        density_kg_m3=entry.get("density_kg_m3"),
+        tensile_yield_MPa=entry.get("tensile_yield_MPa"),
+    )
 
 
 def elastic_C(E: float, nu: float) -> np.ndarray:
