@@ -68,6 +68,28 @@ def test_training_decreases_energy():
     assert all(np.isfinite(hist.U)) and all(u >= 0 for u in hist.U)
 
 
+def test_reaction_consistency_gap_improves():
+    """K_energy vs K_reaction gap must shrink as energy is minimized.
+
+    This is the unlabeled-training sanity check: an untrained net is wildly
+    inconsistent (large gap); minimizing energy drives K_energy and K_reaction
+    together (Clapeyron). On the analytic single-hex problem they both approach E.
+    """
+    torch.manual_seed(0)
+    mesh = _single_hex_mesh()
+    bs = _x_boundary(mesh.coords)
+    C = elastic_C(E, NU)
+    model = FakeBackbone(FEATURE_DIM)
+    cfg = TrainConfig(move_axis="x", delta_mm=DELTA, move_transverse_rigid=False,
+                      steps=600, lr=5e-3, log_every=100)
+    hist = train_single(model, mesh, bs, C, E_MPa=E, nu=NU, cfg=cfg, verbose=False)
+    assert hist.rel_gap[-1] < hist.rel_gap[0]            # gap shrinks
+    assert hist.rel_gap[-1] < 1e-2                       # and gets genuinely small
+    # both stiffness estimates approach the analytic E within a few percent
+    assert abs(hist.K_energy[-1] - E) / E < 0.05
+    assert abs(hist.K_reaction[-1] - E) / E < 0.05
+
+
 def test_bc_satisfied_during_training():
     """Even with a random fake backbone, enforced u must satisfy the BCs exactly."""
     torch.manual_seed(1)
