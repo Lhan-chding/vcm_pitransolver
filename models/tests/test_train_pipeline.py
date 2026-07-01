@@ -113,6 +113,31 @@ def test_reaction_consistency_gap_improves():
     assert abs(hist.K_reaction[-1] - E) / E < 0.05
 
 
+def test_lbfgs_refinement_beats_adam_alone():
+    """Adam + L-BFGS must reach a LOWER energy and SMALLER gap than Adam alone.
+
+    The energy Hessian is ill-conditioned; second-order L-BFGS with strong-Wolfe
+    line search refines past where first-order Adam stalls. On the analytic hex
+    both K estimates should land within a tight tolerance of E."""
+    def _run(lbfgs_steps):
+        torch.manual_seed(0)
+        mesh = _single_hex_mesh()
+        bs = _x_boundary(mesh.coords)
+        C = elastic_C(E, NU)
+        model = FakeBackbone(FEATURE_DIM)
+        cfg = TrainConfig(move_axis="x", delta_mm=DELTA, move_transverse_rigid=False,
+                          steps=100, lr=5e-3, log_every=50,
+                          lbfgs_steps=lbfgs_steps, lbfgs_max_iter=20)
+        return train_single(model, mesh, bs, C, E_MPa=E, nu=NU, cfg=cfg, verbose=False)
+
+    adam = _run(0)
+    both = _run(20)
+    assert both.U[-1] < adam.U[-1]              # lower energy
+    assert both.rel_gap[-1] < adam.rel_gap[-1]  # smaller consistency gap
+    assert both.rel_gap[-1] < 1e-4              # genuinely tight after refinement
+    assert abs(both.K_energy[-1] - E) / E < 1e-3
+
+
 def test_bc_satisfied_during_training():
     """Even with a random fake backbone, enforced u must satisfy the BCs exactly."""
     torch.manual_seed(1)

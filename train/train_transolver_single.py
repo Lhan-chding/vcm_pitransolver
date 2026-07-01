@@ -50,8 +50,15 @@ _DTYPES = {"float64": torch.float64, "float32": torch.float32}
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("variant", help="path to the variant directory")
-    ap.add_argument("--steps", type=int, default=2000)
+    ap.add_argument("--steps", type=int, default=2000,
+                    help="Adam warmup steps (get into the basin)")
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lbfgs-steps", type=int, default=0,
+                    help="L-BFGS refinement steps after Adam (0 = Adam only). "
+                         "L-BFGS drives U and the gap to float64 precision.")
+    ap.add_argument("--lbfgs-max-iter", type=int, default=20,
+                    help="inner line-search iterations per L-BFGS step")
+    ap.add_argument("--lbfgs-history", type=int, default=100)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dtype", choices=list(_DTYPES), default="float64")
     ap.add_argument("--n-layers", type=int, default=8)
@@ -106,6 +113,9 @@ def main() -> None:
         move_transverse_rigid=phys.get("move_transverse", "rigid") == "rigid",
         steps=args.steps, lr=args.lr, log_every=max(1, args.steps // 20),
         dtype=dtype, device=device,
+        lbfgs_steps=args.lbfgs_steps,
+        lbfgs_max_iter=args.lbfgs_max_iter,
+        lbfgs_history=args.lbfgs_history,
     )
 
     t0 = time.perf_counter()
@@ -116,8 +126,8 @@ def main() -> None:
     k_energy = hist.K_energy[-1]
     k_reaction = hist.K_reaction[-1]
     print("\n" + "=" * 64)
-    print(f"trained {args.steps} steps in {train_s:.1f}s "
-          f"({1e3*train_s/max(args.steps,1):.1f} ms/step)")
+    print(f"trained {args.steps} Adam + {args.lbfgs_steps} L-BFGS steps "
+          f"in {train_s:.1f}s")
     print(f"U:          {hist.U[0]:.6e} -> {hist.U[-1]:.6e}")
     print(f"K_energy:   {k_energy:.6e} N/mm")
     print(f"K_reaction: {k_reaction:.6e} N/mm")
@@ -135,6 +145,9 @@ def main() -> None:
             "variant": variant.name,
             "num_nodes": mesh.num_nodes, "num_dofs": 3 * mesh.num_nodes,
             "steps": args.steps, "lr": args.lr,
+            "lbfgs_steps": args.lbfgs_steps,
+            "lbfgs_max_iter": args.lbfgs_max_iter,
+            "lbfgs_history": args.lbfgs_history,
             "dtype": args.dtype, "device": device,
             "model": {"n_layers": args.n_layers, "n_hidden": args.n_hidden,
                       "n_head": args.n_head, "slice_num": args.slice_num,
