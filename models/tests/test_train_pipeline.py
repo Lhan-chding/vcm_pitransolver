@@ -18,7 +18,7 @@ from parse_mesh import Mesh
 from parse_face_to_nodes import BoundarySets
 from fem.material import elastic_C
 from fem.tests.reference_elements import hex20_reference
-from models.transolver_wrap import FakeBackbone, forward_single
+from models.transolver_wrap import FakeBackbone, ScaledBackbone, forward_single
 from models.features import FEATURE_DIM, build_node_inputs
 from train.train_single import TrainConfig, train_single
 
@@ -51,6 +51,29 @@ def test_fake_backbone_forward_shape():
     model = FakeBackbone(FEATURE_DIM).to(torch.float64)
     u = forward_single(model, ni.fx, ni.coords_net)
     assert u.shape == (20, 3)
+
+
+def test_scaled_backbone_scales_output_and_shares_params():
+    """ScaledBackbone multiplies the wrapped output by `scale`, shares params,
+    and preserves shape/gradient flow — the O(1)->O(delta) rescale used on the
+    server so an untrained net does not emit ~1000x-too-large displacements."""
+    torch.manual_seed(0)
+    mesh = _single_hex_mesh()
+    bs = _x_boundary(mesh.coords)
+    ni = build_node_inputs(mesh.coords, bs, E_MPa=E, nu=NU, delta_mm=DELTA)
+
+    core = FakeBackbone(FEATURE_DIM).to(torch.float64)
+    scaled = ScaledBackbone(core, scale=DELTA).to(torch.float64)
+
+    u_core = forward_single(core, ni.fx, ni.coords_net)
+    u_scaled = forward_single(scaled, ni.fx, ni.coords_net)
+    assert u_scaled.shape == (20, 3)
+    assert torch.allclose(u_scaled, u_core * DELTA)
+    # wraps the same parameters (no copies), so the optimizer trains the core
+    assert {id(p) for p in scaled.parameters()} == {id(p) for p in core.parameters()}
+    # gradient flows through the scale into the wrapped net
+    u_scaled.sum().backward()
+    assert any(p.grad is not None and torch.any(p.grad != 0) for p in core.parameters())
 
 
 def test_training_decreases_energy():

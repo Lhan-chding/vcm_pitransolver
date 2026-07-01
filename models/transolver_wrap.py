@@ -70,6 +70,29 @@ class FakeBackbone(nn.Module):
         return self.net(x)
 
 
+class ScaledBackbone(nn.Module):
+    """Wrap a backbone so its raw output is multiplied by a fixed `scale`.
+
+    A physics-informed net predicts a dimensionless field ~O(1); the physical
+    displacement is ~O(delta) (the prescribed move, here 5e-3 mm). Without
+    scaling, an untrained net emits O(1) displacements — ~1000x the true
+    magnitude — so the elastic energy (proportional to u^2) starts ~1e6x too
+    large, the gradients explode, and training is unstable even in float64.
+    Multiplying the output by `delta` puts the network's learning target at O(1)
+    while the physical displacement lands at the right scale. Purely a rescale of
+    the output: it shares the wrapped backbone's parameters and call signature, so
+    the optimizer and forward_single see it transparently.
+    """
+
+    def __init__(self, backbone: nn.Module, scale: float):
+        super().__init__()
+        self.backbone = backbone
+        self.scale = float(scale)
+
+    def forward(self, fx: torch.Tensor, embedding: torch.Tensor) -> torch.Tensor:
+        return self.backbone(fx, embedding=embedding) * self.scale
+
+
 def forward_single(model: nn.Module, fx: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
     """B=1 single-geometry forward: fx (N,F), coords (N,3) -> u_raw (N,3).
 
