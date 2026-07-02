@@ -1,9 +1,15 @@
 """features.py — node features and the coords_net / coords_phys dual track.
 
-The network sees NORMALIZED coordinates (zero-centered, unit-scaled) for
-conditioning; the FEM energy is ALWAYS computed on the original physical mm
+The network sees NORMALIZED coordinates (zero-centered, PER-AXIS unit-scaled)
+for conditioning; the FEM energy is ALWAYS computed on the original physical mm
 coordinates. Mixing these up silently rescales the energy, so they are kept as
 two explicit tensors and never conflated.
+
+Normalization is per-axis (each axis divided by its own bbox extent), not by a
+single scalar. VCM parts are extreme thin plates (thickness:width ~1:190), and a
+single-scalar scale would crush the thin axis to near-zero in coords_net,
+blinding the network to thickness-direction position — the root cause of the
+~2.2e4x stiffness overshoot seen in the first energy-trained run.
 
 Node feature vector fx (per node):
   [fixed_flag, move_flag, free_flag,
@@ -34,7 +40,8 @@ class NodeInputs:
     coords_phys: torch.Tensor    # (N, 3) physical mm coords -> FEM energy
     fx: torch.Tensor             # (N, F) node feature matrix
     center: np.ndarray           # (3,) bbox center used for normalization
-    scale: float                 # scalar used for normalization
+    scale: np.ndarray            # (3,) PER-AXIS extent used to normalize coords_net
+    scale_iso: float             # scalar (max extent) used to normalize distance feats
 
 
 def _nearest_dist(coords: np.ndarray, target_rows: np.ndarray) -> np.ndarray:
@@ -62,10 +69,19 @@ def build_node_inputs(
     n = coords.shape[0]
     axis = _AXIS[move_axis.lower()]
 
-    # coordinate dual-track
+    # coordinate dual-track. PER-AXIS normalization: a VCM part is an extreme
+    # thin plate (variant 0001: x=0.06mm vs y=z=11.42mm, ratio ~190). A single
+    # scalar scale = max(extent) crushes the thin (move) axis to ~5e-3 in
+    # coords_net, so the network is effectively blind to thickness-direction
+    # position and cannot express the steep thin-axis gradient — its "smooth"
+    # field then maps to huge physical strain (energy ~ (L/t)^2 too large, the
+    # observed ~2.2e4x K overshoot). Normalizing each axis by its OWN extent
+    # puts every axis at O(1) span so the net can resolve all three directions.
     lo, hi = coords.min(0), coords.max(0)
     center = 0.5 * (lo + hi)
-    scale = float(np.max(hi - lo)) or 1.0
+    extent = hi - lo
+    scale = np.where(extent > 0.0, extent, 1.0)      # (3,) per-axis, guard zero
+    scale_iso = float(np.max(extent)) or 1.0         # scalar for distance feats
     coords_net_np = (coords - center) / scale
 
     # boundary flags
@@ -73,9 +89,13 @@ def build_node_inputs(
     move_flag = np.zeros(n); move_flag[bs.move_nodes] = 1.0
     free_flag = 1.0 - fixed_flag - move_flag
 
-    # distances (normalized by scale so they are ~O(1))
-    d_fixed = _nearest_dist(coords, np.asarray(bs.fixed_nodes)) / scale
-    d_move = _nearest_dist(coords, np.asarray(bs.move_nodes)) / scale
+    # distances (normalized by the ISOTROPIC scalar so they stay ~O(1)). A
+    # Euclidean distance is a single length, not a per-axis quantity, so it must
+    # be divided by a scalar — dividing by the per-axis `scale` vector would be
+    # dimensionally wrong. scale_iso == the old scalar scale, so this feature is
+    # numerically unchanged; only coords_net gains the per-axis treatment.
+    d_fixed = _nearest_dist(coords, np.asarray(bs.fixed_nodes)) / scale_iso
+    d_move = _nearest_dist(coords, np.asarray(bs.move_nodes)) / scale_iso
     d_fixed = np.where(np.isfinite(d_fixed), d_fixed, 0.0)
     d_move = np.where(np.isfinite(d_move), d_move, 0.0)
 
@@ -99,6 +119,7 @@ def build_node_inputs(
         fx=torch.as_tensor(fx_np, dtype=dtype, device=device),
         center=center,
         scale=scale,
+        scale_iso=scale_iso,
     )
 
 
